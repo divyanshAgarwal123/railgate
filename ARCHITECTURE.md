@@ -27,7 +27,7 @@ flowchart LR
     Ledger --> Audit
 ```
 
-Three possible outcomes for every `checkout` call, and only one of them touches Razorpay:
+Four possible outcomes for every `checkout` call, and only one of them touches Razorpay:
 
 1. **`blocked_injection`** — the product's description matched an instruction-shaped
    pattern (`src/governor.ts`'s `screenText`). Logged as an `injection` incident. The
@@ -37,6 +37,11 @@ Three possible outcomes for every `checkout` call, and only one of them touches 
    `approve(id)` to release it. Nothing executes silently in either direction.
 3. **`executed`** — a real Razorpay order + payment link, and a balanced double-entry ledger
    posting (`session:<id>` debited, `merchant:<id>` credited).
+4. **`error`** — Razorpay's API itself failed (network blip, rejected request, malformed
+   response). Caught in `executeRazorpayOrder`, logged as a `razorpay_error` incident and a
+   `checkout.failed` audit row, returned as a clean result — never an uncaught exception that
+   takes the MCP server down mid-session. Same rule as the other two blocks: a failure is
+   data the caller gets to see, not a crash.
 
 ## Components
 
@@ -63,6 +68,18 @@ Three possible outcomes for every `checkout` call, and only one of them touches 
 - **`ledger_txns` / `ledger_legs`** — only *executed* money movements land here. Blocked or
   pending attempts live in `audit_log` / `checkout_pending`, not the ledger — the ledger
   only ever records money that actually moved.
+
+## Why the gate is code, not a model call
+
+The spend ceiling and the injection screen are plain deterministic logic — a number
+comparison and a regex list — not an LLM asked to judge whether a purchase looks safe. That's
+deliberate. Whether a purchase breaches a cap is not a judgment call; it's arithmetic, and
+arithmetic should never have a confidence score attached to it. The agent (Claude, or
+whatever's on the other end of MCP) is exactly where an LLM belongs — deciding *what* to buy,
+reading a catalog, holding a conversation. Deciding *whether the purchase is allowed to
+happen* is not that kind of decision, and routing it through a model would mean the one
+component that's supposed to be trustworthy is itself persuadable — which is the entire
+attack `prod_bulk`'s poisoned listing is trying to exploit in the first place.
 
 ## Provenance
 

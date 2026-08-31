@@ -2,7 +2,7 @@
 // else in the codebase is permitted to reach api.razorpay.com directly.
 
 import type { Db } from "./db.ts";
-import { audit } from "./db.ts";
+import { audit, incident } from "./db.ts";
 import { CheckoutGateBlocked, requireCheckoutApproval, screenText } from "./governor.ts";
 import { recordPurchase } from "./ledger.ts";
 import { createOrder, createPaymentLink, type RazorpayPaymentLink } from "./razorpay.ts";
@@ -10,7 +10,8 @@ import { createOrder, createPaymentLink, type RazorpayPaymentLink } from "./razo
 export type CheckoutResult =
   | { status: "executed"; orderId: string; paymentLink: RazorpayPaymentLink }
   | { status: "blocked_injection"; reason: string }
-  | { status: "blocked_pending_approval"; pendingId: string; reason: string };
+  | { status: "blocked_pending_approval"; pendingId: string; reason: string }
+  | { status: "error"; reason: string };
 
 export interface CheckoutInput {
   sessionId: string;
@@ -19,6 +20,48 @@ export interface CheckoutInput {
   product: string;
   /** Freeform text from the merchant's catalog — outside the trust boundary, always screened. */
   description: string;
+}
+
+/**
+ * The only place that actually calls Razorpay. A network blip, a rejected request, a
+ * malformed response — none of it should crash the caller (the MCP server, mid-session).
+ * It's logged as an incident and comes back as a clean `error` result instead, same rule
+ * as the spend gate and the injection screen: a failure is data the caller gets to see,
+ * never a silent crash.
+ */
+async function executeRazorpayOrder(
+  db: Db,
+  args: {
+    sessionId: string;
+    merchantId: string;
+    amountPaise: number;
+    product: string;
+    auditAction: string;
+    auditExtra?: Record<string, unknown>;
+  },
+): Promise<CheckoutResult> {
+  try {
+    const order = await createOrder(args.amountPaise, `railgate-${args.sessionId}-${Date.now()}`);
+    const link = await createPaymentLink(args.amountPaise, args.product, order.id);
+
+    recordPurchase(db, args.sessionId, args.merchantId, args.amountPaise, args.product, order.id);
+    audit(db, {
+      actor: "governor",
+      action: args.auditAction,
+      newValue: { sessionId: args.sessionId, orderId: order.id, amountPaise: args.amountPaise, ...args.auditExtra },
+    });
+
+    return { status: "executed", orderId: order.id, paymentLink: link };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    incident(db, { sessionId: args.sessionId, kind: "razorpay_error", severity: "critical", detail: reason });
+    audit(db, {
+      actor: "governor",
+      action: "checkout.failed",
+      newValue: { sessionId: args.sessionId, amountPaise: args.amountPaise, reason },
+    });
+    return { status: "error", reason };
+  }
 }
 
 export async function attemptCheckout(db: Db, req: CheckoutInput): Promise<CheckoutResult> {
@@ -39,33 +82,26 @@ export async function attemptCheckout(db: Db, req: CheckoutInput): Promise<Check
   }
 
   // 3. Inside the bound — execute for real, against Razorpay test-mode.
-  const order = await createOrder(req.amountPaise, `railgate-${req.sessionId}-${Date.now()}`);
-  const link = await createPaymentLink(req.amountPaise, req.product, order.id);
-
-  recordPurchase(db, req.sessionId, req.merchantId, req.amountPaise, req.product, order.id);
-  audit(db, {
-    actor: "governor",
-    action: "checkout.executed",
-    newValue: { sessionId: req.sessionId, orderId: order.id, amountPaise: req.amountPaise },
+  return executeRazorpayOrder(db, {
+    sessionId: req.sessionId,
+    merchantId: req.merchantId,
+    amountPaise: req.amountPaise,
+    product: req.product,
+    auditAction: "checkout.executed",
   });
-
-  return { status: "executed", orderId: order.id, paymentLink: link };
 }
 
 /** Executes a previously-approved pending request — called after a human approves it. */
-export async function executeApproved(
+export function executeApproved(
   db: Db,
   pending: { id: string; session_id: string; merchant_id: string; amount_paise: number; product: string },
 ): Promise<CheckoutResult> {
-  const order = await createOrder(pending.amount_paise, `railgate-${pending.session_id}-${Date.now()}`);
-  const link = await createPaymentLink(pending.amount_paise, pending.product, order.id);
-
-  recordPurchase(db, pending.session_id, pending.merchant_id, pending.amount_paise, pending.product, order.id);
-  audit(db, {
-    actor: "governor",
-    action: "checkout.executed_after_approval",
-    newValue: { pendingId: pending.id, orderId: order.id },
+  return executeRazorpayOrder(db, {
+    sessionId: pending.session_id,
+    merchantId: pending.merchant_id,
+    amountPaise: pending.amount_paise,
+    product: pending.product,
+    auditAction: "checkout.executed_after_approval",
+    auditExtra: { pendingId: pending.id },
   });
-
-  return { status: "executed", orderId: order.id, paymentLink: link };
 }

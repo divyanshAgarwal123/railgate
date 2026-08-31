@@ -1,0 +1,18 @@
+{
+  "name": "railgate",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "A governed checkout layer for agentic commerce — Razorpay AI Buildathon, Track 1",
+  "scripts": {
+    "day1": "node --env-file-if-exists=.env src/day1-checkout.ts",
+    "day2": "node --env-file-if-exists=.env src/day2-demo.ts",
+    "mcp": "node --env-file-if-exists=.env src/mcp-server.ts",
+    "mcp:test": "node --env-file-if-exists=.env src/mcp-smoke-test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^12.2.0",
+    "zod": "^3.24.1"
+  }
+}

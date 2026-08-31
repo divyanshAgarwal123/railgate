@@ -26,6 +26,17 @@ one failure handled gracefully."
    [`src/mcp-smoke-test.ts`](src/mcp-smoke-test.ts).
 4. **Days 4–5.** Write-up + pitch video (in progress).
 
+## Verify the core logic — no Razorpay keys needed
+
+```bash
+npm test
+```
+
+The ledger and governor logic (spend gate, single-use approval, injection screen) tested
+against an in-memory db, no network. Everything below this point (`day1`, `day2`, `mcp`)
+needs real Razorpay test-mode keys because it calls the live API — this is what proves the
+mechanism runs on any machine, cold.
+
 ## Day 1 — raw round trip
 
 ```bash

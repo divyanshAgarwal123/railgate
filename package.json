@@ -5,6 +5,7 @@
   "type": "module",
   "description": "A governed checkout layer for agentic commerce — Razorpay AI Buildathon, Track 1",
   "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
     "day1": "node --env-file-if-exists=.env src/day1-checkout.ts",
     "day2": "node --env-file-if-exists=.env src/day2-demo.ts",
     "mcp": "node --env-file-if-exists=.env src/mcp-server.ts",

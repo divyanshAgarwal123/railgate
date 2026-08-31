@@ -78,7 +78,12 @@ and typing "buy me a candle" live.
 > "The track's bar is 'every money action explainable, bounded and gated, with an audit trail
 > and one failure handled gracefully.' That's not a checkout UI problem — it's a mechanism
 > problem. So the checkout API is the thin part. The governor — the gate, the ledger, the
-> screen — is the actual product."
+> screen — is the actual product.
+>
+> And this is a growth play, not a detour from one — a merchant doesn't hand an AI buyer
+> real spending power without something bounding it first. Nobody turns on the upsell agent,
+> the campaign orchestrator, the bigger transaction limit, until there's a gate they trust.
+> The growth is downstream of this. This is the unlock."
 
 ## 3:50–4:35 — What broke, and how I got out
 

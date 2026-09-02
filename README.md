@@ -3,6 +3,8 @@
 A governed checkout layer for agentic commerce — Razorpay AI Buildathon 2026, Track 1
 (AI Growth & Agentic Commerce).
 
+[![test](https://github.com/divyanshAgarwal123/railgate/actions/workflows/test.yml/badge.svg)](https://github.com/divyanshAgarwal123/railgate/actions/workflows/test.yml)
+
 **The bar:** "Every money action explainable, bounded and gated. Show the audit trail and
 one failure handled gracefully."
 
@@ -24,7 +26,21 @@ one failure handled gracefully."
    client/server round trip, not just direct function calls.
    [`src/catalog.ts`](src/catalog.ts), [`src/mcp-server.ts`](src/mcp-server.ts),
    [`src/mcp-smoke-test.ts`](src/mcp-smoke-test.ts).
-4. **Days 4–5.** Write-up + pitch video (in progress).
+4. **Days 4–5 — ready to record.** Architecture, evidence, application write-up, and pitch
+   script are done; the five-minute video is the remaining submission step.
+
+## What is different about this implementation
+
+Railgate treats a spend cap as an accounting invariant, not a request-time `if` statement.
+Every checkout reserves budget atomically in SQLite *before* the network call. In-flight
+reservations count against the cap, so concurrent agents cannot both observe stale spend and
+oversubscribe the same budget. After Razorpay returns, the reservation becomes an executed
+ledger entry or is released as a recorded failure.
+
+The agent supplies only `{sessionId, productId}`. Price, merchant, and description come from
+Railgate's server-side catalog; an agent cannot lower a price in its tool arguments. The
+description screen is defense-in-depth and incident telemetry. The hard security boundary is
+the deterministic, server-authoritative budget gate.
 
 ## Verify the core logic — no Razorpay keys needed
 
@@ -32,7 +48,8 @@ one failure handled gracefully."
 npm test
 ```
 
-The ledger and governor logic (spend gate, single-use approval, injection screen) tested
+The ledger and governor logic (atomic spend reservation, concurrent cap enforcement,
+single-use approval, injection screen, provider failure) is tested
 against an in-memory db, no network. Everything below this point (`day1`, `day2`, `mcp`)
 needs real Razorpay test-mode keys because it calls the live API — this is what proves the
 mechanism runs on any machine, cold.
@@ -74,13 +91,22 @@ crashing or silently complying.
 ```bash
 npm run mcp        # starts the server on stdio
 npm run mcp:test    # separate terminal / or just this — spawns the server, drives it with
-                     # a real MCP client, asserts all three tools round-trip correctly
+                     # a real MCP client, asserts catalog + checkout round-trip correctly
 ```
 
-Three tools: `list_products` / `get_product` (the agent-readable catalog) and `checkout`
-(the one gated path allowed to reach Razorpay). The seeded catalog
+Four tools: `list_products` / `get_product` (the agent-readable catalog), `checkout`, and
+`execute_approved`. The seeded catalog
 ([`src/catalog.ts`](src/catalog.ts)) includes one poisoned listing (`prod_bulk`) so the
 injection screen has something real to catch when an agent tries to buy it.
+
+An over-cap checkout returns a pending id. Approval is deliberately not an MCP tool—the AI
+cannot approve itself. A human uses a separate terminal:
+
+```bash
+npm run approve -- pend_abc123
+```
+
+The agent can then call `execute_approved` exactly once. A replay is rejected.
 
 To point Claude Code or Claude Desktop at it directly, add to its MCP config:
 
@@ -95,3 +121,9 @@ To point Claude Code or Claude Desktop at it directly, add to its MCP config:
   }
 }
 ```
+
+The submitted flow has also been driven by a real Codex AI buyer over MCP—not only by the
+scripted smoke client. The validated run selected `prod_candle`, created Razorpay test order
+`order_TXJ0oLj5TOxt85`, then attempted the poisoned `prod_bulk`; Railgate returned
+`blocked_injection` and created no order for it. See [`EVIDENCE.md`](EVIDENCE.md) for the
+reproducible evidence matrix.

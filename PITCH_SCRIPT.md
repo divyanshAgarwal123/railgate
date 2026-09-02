@@ -87,17 +87,15 @@ and typing "buy me a candle" live.
 
 ## 3:50–4:35 — What broke, and how I got out
 
-**[ACTION]** Face cam, or the idea-council transcript / `WRITEUP.md` on screen.
+**[ACTION]** Show the concurrency test in `test/checkout.test.ts`, then run `npm test`.
 
-> "Before writing any code, I ran this idea through an adversarial review — four separate
-> passes arguing for it, against it, and on whether the bet was even testable. The verdict
-> came back 'fix first,' and the reason was my build order: I'd planned to port the safety
-> layer — the part I already had a working pattern for — before ever proving the actual
-> Razorpay call worked, on a five-day clock with zero hands-on time against their API. That's
-> backwards. I'd sequenced the safe part first and the genuinely unknown part last. So I threw
-> out that order: day one became nothing but a raw, ungated Razorpay round trip — prove the
-> unknown thing first. Only once that was real did the governor go in on day two, and MCP on
-> day three."
+> "The sequential demo passed, but my final adversarial test fired two ₹600 checkouts at the
+> same ₹1000 session concurrently. Both saw zero spent before either network call returned,
+> both passed, and I ended up at ₹1200. The gate looked bounded and wasn't. I fixed the
+> check-then-act race with an atomic reservation written before Razorpay is called. This test
+> now launches both requests together: one executes, one is gated, exactly one order call is
+> made, and total committed spend stays ₹600. That's the failure I would want a payments team
+> to ask me about."
 
 ## 4:35–5:00 — Close
 

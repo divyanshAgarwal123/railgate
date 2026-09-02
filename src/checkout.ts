@@ -6,6 +6,7 @@ import { audit, incident } from "./db.ts";
 import { CheckoutGateBlocked, requireCheckoutApproval, screenText } from "./governor.ts";
 import { recordPurchase } from "./ledger.ts";
 import { createOrder, createPaymentLink, type RazorpayPaymentLink } from "./razorpay.ts";
+import { getProduct } from "./catalog.ts";
 
 export type CheckoutResult =
   | { status: "executed"; orderId: string; paymentLink: RazorpayPaymentLink }
@@ -15,11 +16,7 @@ export type CheckoutResult =
 
 export interface CheckoutInput {
   sessionId: string;
-  merchantId: string;
-  amountPaise: number;
-  product: string;
-  /** Freeform text from the merchant's catalog — outside the trust boundary, always screened. */
-  description: string;
+  productId: string;
 }
 
 /**
@@ -36,6 +33,7 @@ async function executeRazorpayOrder(
     merchantId: string;
     amountPaise: number;
     product: string;
+    reservationId: string;
     auditAction: string;
     auditExtra?: Record<string, unknown>;
   },
@@ -44,16 +42,22 @@ async function executeRazorpayOrder(
     const order = await createOrder(args.amountPaise, `railgate-${args.sessionId}-${Date.now()}`);
     const link = await createPaymentLink(args.amountPaise, args.product, order.id);
 
-    recordPurchase(db, args.sessionId, args.merchantId, args.amountPaise, args.product, order.id);
-    audit(db, {
-      actor: "governor",
-      action: args.auditAction,
-      newValue: { sessionId: args.sessionId, orderId: order.id, amountPaise: args.amountPaise, ...args.auditExtra },
-    });
+    db.transaction(() => {
+      recordPurchase(db, args.sessionId, args.merchantId, args.amountPaise, args.product, order.id);
+      db.prepare("UPDATE checkout_pending SET status = 'executed', resolved_at = ? WHERE id = ? AND status = 'reserved'")
+        .run(new Date().toISOString(), args.reservationId);
+      audit(db, {
+        actor: "governor",
+        action: args.auditAction,
+        newValue: { sessionId: args.sessionId, orderId: order.id, amountPaise: args.amountPaise, ...args.auditExtra },
+      });
+    })();
 
     return { status: "executed", orderId: order.id, paymentLink: link };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
+    db.prepare("UPDATE checkout_pending SET status = 'failed', resolved_at = ? WHERE id = ? AND status = 'reserved'")
+      .run(new Date().toISOString(), args.reservationId);
     incident(db, { sessionId: args.sessionId, kind: "razorpay_error", severity: "critical", detail: reason });
     audit(db, {
       actor: "governor",
@@ -65,15 +69,29 @@ async function executeRazorpayOrder(
 }
 
 export async function attemptCheckout(db: Db, req: CheckoutInput): Promise<CheckoutResult> {
+  const product = getProduct(req.productId);
+  if (!product) return { status: "error", reason: `Product ${req.productId} not found` };
+
   // 1. Screen anything ingested from outside the trust boundary before it can influence
   //    the purchase at all.
-  if (screenText(db, req.sessionId, "catalog_description", req.description)) {
+  if (screenText(db, req.sessionId, "catalog_description", product.description)) {
+    audit(db, {
+      actor: "governor",
+      action: "checkout.blocked_injection",
+      newValue: { sessionId: req.sessionId, productId: product.id },
+    });
     return { status: "blocked_injection", reason: "Product description flagged as instruction-like text" };
   }
 
   // 2. Gate the spend. Throws if this would breach the session's ceiling.
+  let reservationId: string;
   try {
-    requireCheckoutApproval(db, req);
+    reservationId = requireCheckoutApproval(db, {
+      sessionId: req.sessionId,
+      merchantId: product.merchantId,
+      amountPaise: product.priceP,
+      product: product.name,
+    });
   } catch (err) {
     if (err instanceof CheckoutGateBlocked) {
       return { status: "blocked_pending_approval", pendingId: err.pendingId, reason: err.message };
@@ -84,23 +102,27 @@ export async function attemptCheckout(db: Db, req: CheckoutInput): Promise<Check
   // 3. Inside the bound — execute for real, against Razorpay test-mode.
   return executeRazorpayOrder(db, {
     sessionId: req.sessionId,
-    merchantId: req.merchantId,
-    amountPaise: req.amountPaise,
-    product: req.product,
+    merchantId: product.merchantId,
+    amountPaise: product.priceP,
+    product: product.name,
+    reservationId,
     auditAction: "checkout.executed",
   });
 }
 
 /** Executes a previously-approved pending request — called after a human approves it. */
-export function executeApproved(
-  db: Db,
-  pending: { id: string; session_id: string; merchant_id: string; amount_paise: number; product: string },
-): Promise<CheckoutResult> {
+export async function executeApproved(db: Db, pendingId: string): Promise<CheckoutResult> {
+  const pending = db.prepare("SELECT * FROM checkout_pending WHERE id = ? AND status = 'reserved'").get(pendingId) as
+    | { id: string; session_id: string; merchant_id: string; amount_paise: number; product: string }
+    | undefined;
+  if (!pending) return { status: "error", reason: `Approval ${pendingId} is not reserved for execution` };
+
   return executeRazorpayOrder(db, {
     sessionId: pending.session_id,
     merchantId: pending.merchant_id,
     amountPaise: pending.amount_paise,
     product: pending.product,
+    reservationId: pending.id,
     auditAction: "checkout.executed_after_approval",
     auditExtra: { pendingId: pending.id },
   });

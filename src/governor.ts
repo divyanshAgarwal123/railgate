@@ -37,25 +37,35 @@ export interface CheckoutRequest {
  * this purchase) stays under the ceiling. Otherwise files a pending request and THROWS —
  * the agent does not get the purchase. A human releases it with `approve(id)`.
  */
-export function requireCheckoutApproval(db: Db, req: CheckoutRequest): void {
-  const spent = sessionSpend(db, req.sessionId);
-  const after = spent + req.amountPaise;
-  if (after <= CAPS.SESSION_SPEND_CEILING_PAISE) return;
-
+export function requireCheckoutApproval(db: Db, req: CheckoutRequest): string {
   const id = `pend_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-  db.prepare(
-    `INSERT INTO checkout_pending (id, session_id, ts, merchant_id, amount_paise, product, status)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-  ).run(id, req.sessionId, new Date().toISOString(), req.merchantId, req.amountPaise, req.product);
+  const reserve = db.transaction(() => {
+    const reserved = db
+      .prepare(
+        "SELECT COALESCE(SUM(amount_paise), 0) AS total FROM checkout_pending WHERE session_id = ? AND status = 'reserved'",
+      )
+      .get(req.sessionId) as { total: number };
+    const after = sessionSpend(db, req.sessionId) + reserved.total + req.amountPaise;
+    const status = after <= CAPS.SESSION_SPEND_CEILING_PAISE ? "reserved" : "pending";
 
-  audit(db, {
-    actor: "governor",
-    action: "checkout.blocked",
-    newValue: { id, sessionId: req.sessionId, amountPaise: req.amountPaise, wouldTotal: after },
+    db.prepare(
+      `INSERT INTO checkout_pending (id, session_id, ts, merchant_id, amount_paise, product, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, req.sessionId, new Date().toISOString(), req.merchantId, req.amountPaise, req.product, status);
+
+    audit(db, {
+      actor: "governor",
+      action: status === "reserved" ? "checkout.reserved" : "checkout.blocked",
+      newValue: { id, sessionId: req.sessionId, amountPaise: req.amountPaise, wouldTotal: after },
+    });
+    return { after, status };
   });
+  const result = reserve.immediate();
+
+  if (result.status === "reserved") return id;
 
   throw new CheckoutGateBlocked(
-    `Session spend ceiling would be breached: ₹${after / 100} > ₹${CAPS.SESSION_SPEND_CEILING_PAISE / 100}. ` +
+    `Session spend ceiling would be breached: ₹${result.after / 100} > ₹${CAPS.SESSION_SPEND_CEILING_PAISE / 100}. ` +
       `Blocked pending your approval: approve(${id})`,
     id,
   );
@@ -74,29 +84,16 @@ export function approve(db: Db, id: string, by = "human"): void {
   audit(db, { actor: "human", action: "checkout.approved", newValue: { id, by } });
 }
 
-export function deny(db: Db, id: string, by = "human"): void {
-  db.prepare(
-    "UPDATE checkout_pending SET status = 'denied', resolved_at = ?, resolved_by = ? WHERE id = ?",
-  ).run(new Date().toISOString(), by, id);
-  audit(db, { actor: "human", action: "checkout.denied", newValue: { id, by } });
-}
-
 /** Single-use: consuming one approval never authorises the next purchase, even identical. */
 export function consumeApproval(db: Db, id: string): boolean {
   const changed = db
-    .prepare("UPDATE checkout_pending SET status = 'consumed' WHERE id = ? AND status = 'approved'")
+    .prepare("UPDATE checkout_pending SET status = 'reserved' WHERE id = ? AND status = 'approved'")
     .run(id).changes;
   if (changed === 1) {
     audit(db, { actor: "governor", action: "checkout.consumed", newValue: { id } });
     return true;
   }
   return false;
-}
-
-export function getPending(db: Db, id: string) {
-  return db.prepare("SELECT * FROM checkout_pending WHERE id = ?").get(id) as
-    | { id: string; session_id: string; merchant_id: string; amount_paise: number; product: string; status: string }
-    | undefined;
 }
 
 /**

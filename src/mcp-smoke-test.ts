@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 const transport = new StdioClientTransport({
   command: "node",
   args: ["--env-file-if-exists=.env", "src/mcp-server.ts"],
+  env: { ...process.env, RAILGATE_DB: ":memory:" },
 });
 const client = new Client({ name: "railgate-smoke-test", version: "0.0.1" });
 await client.connect(transport);

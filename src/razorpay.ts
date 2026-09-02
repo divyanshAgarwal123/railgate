@@ -13,6 +13,10 @@ export function checkKeys(): void {
     );
     process.exit(1);
   }
+  if (!keyId.startsWith("rzp_test_")) {
+    console.error("Refusing to run: Railgate accepts Razorpay test-mode keys only.");
+    process.exit(1);
+  }
 }
 
 async function post(path: string, body: unknown) {
@@ -21,6 +25,7 @@ async function post(path: string, body: unknown) {
     method: "POST",
     headers: { Authorization: auth, "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
   });
   const json = await res.json();
   if (!res.ok) throw new Error(`${path} → ${res.status}: ${JSON.stringify(json)}`);

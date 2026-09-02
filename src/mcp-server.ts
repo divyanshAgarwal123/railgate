@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Day 3: the same governed checkout, now over MCP — so Claude (or any MCP client) drives
-// it directly instead of a demo script. Three tools: an agent-readable catalog
-// (list_products / get_product) and a single gated action (checkout) that is the only
+// it directly instead of a demo script. Four tools: an agent-readable catalog
+// (list_products / get_product) and two gated actions (checkout / execute_approved) that are the only
 // path allowed to reach Razorpay. create_order and checkout collapse into one tool here —
 // attemptCheckout already does both, and splitting them added a step with no real demo
 // value.
@@ -11,7 +11,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { checkKeys } from "./razorpay.ts";
 import { openDb } from "./db.ts";
-import { attemptCheckout } from "./checkout.ts";
+import { attemptCheckout, executeApproved } from "./checkout.ts";
+import { consumeApproval } from "./governor.ts";
 import { getProduct, listProducts } from "./catalog.ts";
 
 checkKeys();
@@ -30,6 +31,33 @@ server.registerTool(
   async ({ merchantId }) => ({
     content: [{ type: "text", text: JSON.stringify(listProducts(merchantId)) }],
   }),
+);
+
+server.registerTool(
+  "execute_approved",
+  {
+    title: "Execute a human-approved checkout",
+    description:
+      "Execute one pending checkout after a human has approved its exact id out of band. " +
+      "The approval is single-use; calling this without approval or calling it twice fails.",
+    inputSchema: { pendingId: z.string() },
+    annotations: { destructiveHint: true },
+  },
+  async ({ pendingId }) => {
+    if (!consumeApproval(db, pendingId)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ status: "error", reason: "Approval is missing or already consumed" }),
+          },
+        ],
+        isError: true,
+      };
+    }
+    const result = await executeApproved(db, pendingId);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  },
 );
 
 server.registerTool(
@@ -63,13 +91,7 @@ server.registerTool(
     const product = getProduct(productId);
     if (!product) return { content: [{ type: "text", text: "Not found" }], isError: true };
 
-    const result = await attemptCheckout(db, {
-      sessionId,
-      merchantId: product.merchantId,
-      amountPaise: product.priceP,
-      product: product.name,
-      description: product.description,
-    });
+    const result = await attemptCheckout(db, { sessionId, productId });
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   },
 );

@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
 
 export type Db = Database.Database;
 
-export function openDb(path: string = resolve(process.cwd(), "var/railgate.db")): Db {
+export function openDb(path: string = process.env.RAILGATE_DB ?? resolve(process.cwd(), "var/railgate.db")): Db {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
 
   const db = new Database(path);

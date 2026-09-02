@@ -24,28 +24,23 @@ Razorpay — all three over a real MCP client/server round trip, not a mocked de
 
 ## What broke, and how I got out
 
-Before writing any code, I ran the idea through an adversarial four-pass review — a Believer
-making the strongest case for it, a Skeptic trying to kill it, an Investor asking whether the
-underlying bet was actually testable, and a Judge weighing the three. The verdict came back
-FIX FIRST, and the reason was the build order I'd planned: port the governor/ledger/
-injection-screen safety layer first (the part I already had a proven pattern for), and only
-wire the actual Razorpay API on day two. That's backwards risk sequencing on a five-day solo
-clock with zero prior hands-on time against Razorpay's live API — I'd scheduled the *proven*
-part first and the *unproven, external* part last, which is exactly the kind of ordering
-mistake that quietly eats a hackathon's runway. The fix was mechanical: invert it. Day one
-became nothing but a raw, ungated order + payment-link round trip against Razorpay
-test-mode — no governor, no MCP, just proof the one genuinely unknown piece worked. Only once
-that was real, live, and returning actual order IDs did the safety layer get ported in on day
-two, and MCP on day three.
+The demo worked and every sequential test passed, but the final adversarial review found the
+core spend cap was still raceable. I fired two ₹600 checkouts concurrently at a fresh ₹1,000
+session. Both read ₹0 spent before either Razorpay call returned, both passed the check, and
+both executed: ₹1,200 committed under a ₹1,000 ceiling. The bug was a classic check-then-act
+gap around an awaited network call—the exact kind of failure a payments system cannot hide
+behind a successful happy-path demo.
 
-Two smaller, real catches worth naming because a hackathon judge reading a repo should be
-able to tell the difference between "never broke" and "broke, in ways I actually noticed and
-fixed": the first version of the day-one script used Node's `--env-file=.env` flag, which
-throws on a missing file — so the very first run, before any keys existed, crashed with a raw
-ENOENT instead of the readable "here's what to do" message it was supposed to give. Caught by
-actually running it empty-handed instead of assuming the happy path; fixed with
-`--env-file-if-exists=.env`. And when staging the first commit, the demo's own runtime
-SQLite file (containing whatever test orders earlier runs had created) nearly went into
-`git add -A` because `var/` wasn't in `.gitignore` yet — caught by reading `git status`
-before committing rather than committing blind, which is the same discipline the project's
-own audit trail is supposed to enforce on everything else.
+I replaced the request-time comparison with an atomic reservation. An immediate SQLite
+transaction now reads executed spend plus in-flight reservations and reserves the amount
+before any Razorpay request starts. The external call then settles that reservation to
+`executed` or releases it as `failed`. The regression test launches both ₹600 requests at
+once and proves the invariant: one executes, one returns `blocked_pending_approval`, exactly
+one Razorpay order call occurs, and committed spend remains ₹600. That test now runs in CI.
+
+The same audit exposed two related gaps: the MCP smoke test passed a temporary database path
+that `openDb()` silently ignored, so repeated runs leaked spend state; and the supposed human
+approval in the demo was an automatic function call. `openDb()` now honours `RAILGATE_DB`,
+the live MCP test passes repeatedly from a clean in-memory database, and approval is a real
+out-of-band CLI action. The AI can execute that exact approved id once, but it has no tool to
+approve itself and a replay is rejected.

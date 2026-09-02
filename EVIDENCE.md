@@ -9,7 +9,7 @@ This is the reproducible claim matrix for Razorpay AI Buildathon Track 01.
 | Razorpay integration is real | Orders and Payment Links are created against Razorpay test mode; non-test keys are refused | `npm run day2` |
 | MCP is real, not a direct function demo | Official MCP client spawns the stdio server and exercises catalog + checkout | `npm run mcp:test` |
 | Human approval is out of band and single-use | Agent receives a pending id; human runs `npm run approve -- <id>`; `execute_approved` works once and replay fails | `npm run mcp` plus the approval command |
-| A real AI buyer can drive it | Codex over MCP selected a product and created test order `order_TXJ0oLj5TOxt85`; a second hostile listing attempt returned `blocked_injection` with no order | Re-run with any MCP-capable agent |
+| A real AI buyer can drive it | Codex over MCP selected a product and created test order `order_TXJ0oLj5TOxt85`; a second hostile listing attempt returned `blocked_injection` with no order | `npm run agent:demo` (Codex CLI required) |
 | The repository stays verifiable | GitHub Actions runs the offline suite on every push and pull request | `.github/workflows/test.yml` |
 
 ## Honest boundaries

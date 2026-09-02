@@ -13,7 +13,8 @@
     "day2": "node --env-file-if-exists=.env src/day2-demo.ts",
     "mcp": "node --env-file-if-exists=.env src/mcp-server.ts",
     "mcp:test": "node --env-file-if-exists=.env src/mcp-smoke-test.ts",
-    "approve": "node src/approve.ts"
+    "approve": "node src/approve.ts",
+    "agent:demo": "sh scripts/agent-demo.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

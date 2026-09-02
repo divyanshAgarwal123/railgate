@@ -108,6 +108,20 @@ npm run approve -- pend_abc123
 
 The agent can then call `execute_approved` exactly once. A replay is rejected.
 
+### Recording path: a real AI buyer
+
+If Codex CLI is installed and signed in, one command runs the camera-ready flow:
+
+```bash
+npm run agent:demo
+```
+
+Codex discovers the catalog over MCP, executes a clean purchase, gets blocked on the second,
+and prints the pending id. The script pauses until the human runs the separate approval CLI,
+then a fresh agent process executes that id once and attempts the poisoned listing. No model
+SDK or second API key is added to Railgate; the AI is the MCP client and the money policy
+stays deterministic.
+
 To point Claude Code or Claude Desktop at it directly, add to its MCP config:
 
 ```json
